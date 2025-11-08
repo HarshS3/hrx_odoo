@@ -86,7 +86,24 @@ export default function PayrollPage() {
   }, [])
 
   async function handleCreatePayrun() {
-    try { await createPayrun(newPayrun); toast.success('Payrun created'); setShowCreatePayrunModal(false); loadData() } catch(e){ toast.error(e.message||'Create failed') }
+    try { 
+      const result = await createPayrun(newPayrun); 
+      toast.success('Payrun created'); 
+      
+      // Show warnings if employees were skipped
+      if (result.warnings && result.warnings.employees_without_salary) {
+        const skipped = result.warnings.employees_without_salary;
+        toast.warning(
+          `${result.warnings.message}\n\nSkipped employees: ${skipped.map(e => e.name).join(', ')}`,
+          { duration: 10000 }
+        );
+      }
+      
+      setShowCreatePayrunModal(false); 
+      loadData() 
+    } catch(e){ 
+      toast.error(e.message||'Create failed') 
+    }
   }
   async function handleValidatePayslip(id) { try { await validatePayslip(id); toast.success('Validated'); setSelectedEmployee(null); loadData() } catch(e){ toast.error(e.message||'Validate failed') } }
   async function handleCancelPayslip(id) { try { await cancelPayslip(id); toast.success('Cancelled'); setSelectedEmployee(null); loadData() } catch(e){ toast.error(e.message||'Cancel failed') } }
@@ -204,8 +221,8 @@ export default function PayrollPage() {
             ) : (
               <div className="space-y-6">
                 <Card><CardContent className="p-6"><div className="flex items-center justify-between mb-4"><h2 className="text-xl font-semibold">Payrun {getMonthName(selectedPayrun.period_month)} {selectedPayrun.period_year}</h2><Button variant="outline" size="sm" onClick={()=>{setSelectedPayrun(null); setSelectedEmployee(null)}}>Back</Button></div><div className="grid grid-cols-3 gap-6"><div><p className="text-sm text-gray-500 dark:text-gray-400">Employer Cost</p><p className="text-lg font-semibold">₹ {(selectedPayrun.total_employer_cost||0).toLocaleString()}</p></div><div><p className="text-sm text-gray-500 dark:text-gray-400">Gross Wage</p><p className="text-lg font-semibold">₹ {(selectedPayrun.employees?.reduce((s,e)=> s+(e.gross_wage||0),0)||0).toLocaleString()}</p></div><div><p className="text-sm text-gray-500 dark:text-gray-400">Net Wage</p><p className="text-lg font-semibold">₹ {(selectedPayrun.employees?.reduce((s,e)=> s+(e.net_wage||0),0)||0).toLocaleString()}</p></div></div></CardContent></Card>
-                <Card><CardHeader><CardTitle>Employee Payslips</CardTitle></CardHeader><CardContent><div className="overflow-x-auto"><table className="w-full"><thead><tr className="border-b dark:border-gray-700"><th className="text-left py-3 px-4 text-sm">Pay Period</th><th className="text-left py-3 px-4 text-sm">Employee</th><th className="text-left py-3 px-4 text-sm">Gross</th><th className="text-left py-3 px-4 text-sm">Net</th><th className="text-left py-3 px-4 text-sm">Status</th><th className="text-left py-3 px-4 text-sm">Actions</th></tr></thead><tbody>{selectedPayrun.employees?.map(emp => (
-                  <tr key={emp.id} className="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800"><td className="py-3 px-4 text-sm">{getMonthName(selectedPayrun.period_month)} {selectedPayrun.period_year}</td><td className="py-3 px-4 text-sm text-blue-600 dark:text-blue-400 cursor-pointer" onClick={()=> openPayslipDetail(emp, selectedPayrun)}>{emp.employee_name || 'Employee'}</td><td className="py-3 px-4 text-sm">₹ {(emp.gross_wage||0).toLocaleString()}</td><td className="py-3 px-4 text-sm">₹ {(emp.net_wage||0).toLocaleString()}</td><td className="py-3 px-4"><span className={`px-3 py-1 text-xs rounded-full ${emp.status==='validated'?'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400': emp.status==='cancelled'? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400':'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'}`}>{emp.status==='validated'?'Done':emp.status||'Generated'}</span></td><td className="py-3 px-4 text-sm"><div className="flex gap-2"><Button size="sm" variant="outline" onClick={()=> handleRecomputePayslip(emp.id)}>Compute</Button><Button size="sm" onClick={()=> handleValidatePayslip(emp.id)} disabled={emp.status==='validated'||emp.status==='cancelled'}>Validate</Button><Button size="sm" className="bg-red-600 hover:bg-red-700 text-white" disabled={emp.status==='cancelled'} onClick={()=> handleCancelPayslip(emp.id)}>Cancel</Button></div></td></tr>
+                <Card><CardHeader><CardTitle>Employee Payslips</CardTitle></CardHeader><CardContent><div className="overflow-x-auto"><table className="w-full"><thead><tr className="border-b dark:border-gray-700"><th className="text-left py-3 px-4 text-sm">Pay Period</th><th className="text-left py-3 px-4 text-sm">Employee</th><th className="text-left py-3 px-4 text-sm">Basic Wage</th><th className="text-left py-3 px-4 text-sm">Gross</th><th className="text-left py-3 px-4 text-sm">Net</th><th className="text-left py-3 px-4 text-sm">Employer Cost</th><th className="text-left py-3 px-4 text-sm">Status</th><th className="text-left py-3 px-4 text-sm">Actions</th></tr></thead><tbody>{selectedPayrun.employees?.map(emp => (
+                  <tr key={emp.id} className="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800"><td className="py-3 px-4 text-sm">{getMonthName(selectedPayrun.period_month)} {selectedPayrun.period_year}</td><td className="py-3 px-4 text-sm text-blue-600 dark:text-blue-400 cursor-pointer" onClick={()=> openPayslipDetail(emp, selectedPayrun)}>{emp.employee_name || 'Employee'}</td><td className="py-3 px-4 text-sm">₹ {(emp.basic_wage||0).toLocaleString()}</td><td className="py-3 px-4 text-sm">₹ {(emp.gross_wage||0).toLocaleString()}</td><td className="py-3 px-4 text-sm">₹ {(emp.net_wage||0).toLocaleString()}</td><td className="py-3 px-4 text-sm font-semibold text-purple-600 dark:text-purple-400">₹ {(emp.employer_cost||0).toLocaleString()}</td><td className="py-3 px-4"><span className={`px-3 py-1 text-xs rounded-full ${emp.status==='validated'?'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400': emp.status==='cancelled'? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400':'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'}`}>{emp.status==='validated'?'Done':emp.status||'Generated'}</span></td><td className="py-3 px-4 text-sm"><div className="flex gap-2"><Button size="sm" variant="outline" onClick={()=> handleRecomputePayslip(emp.id)}>Compute</Button><Button size="sm" onClick={()=> handleValidatePayslip(emp.id)} disabled={emp.status==='validated'||emp.status==='cancelled'}>Validate</Button><Button size="sm" className="bg-red-600 hover:bg-red-700 text-white" disabled={emp.status==='cancelled'} onClick={()=> handleCancelPayslip(emp.id)}>Cancel</Button></div></td></tr>
                 ))}</tbody></table></div></CardContent></Card>
               </div>
             )}

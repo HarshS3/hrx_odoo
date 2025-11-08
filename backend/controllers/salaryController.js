@@ -3,13 +3,35 @@ import { pool } from '../db.js';
 // Public employee fields reused for salary views
 const EMPLOYEE_MIN_FIELDS = `e.id, e.first_name, e.last_name, e.email, e.company_id`;
 
-// Self view of own salary structure
+// Self view of own salary structure OR get employee salary (admin/hr/payroll)
 export async function getMySalaryStructure(req, res) {
   try {
-    const userId = req.user.id;
-    const empQ = await pool.query('SELECT id FROM employees WHERE user_id=$1 LIMIT 1', [userId]);
-    if (!empQ.rowCount) return res.status(404).json({ error: 'Employee profile not found' });
-    const empId = empQ.rows[0].id;
+    let empId;
+    
+    // Check if employee_id is provided in params (admin/hr/payroll viewing other employee)
+    if (req.params.employee_id) {
+      const { employee_id } = req.params;
+      const companyId = req.user.company_id;
+      
+      // Verify employee belongs to same company
+      const empQ = await pool.query(
+        'SELECT id FROM employees WHERE id=$1 AND company_id=$2 LIMIT 1',
+        [employee_id, companyId]
+      );
+      
+      if (!empQ.rowCount) {
+        return res.status(404).json({ error: 'Employee not found' });
+      }
+      
+      empId = empQ.rows[0].id;
+    } else {
+      // Self view - get from user_id
+      const userId = req.user.id;
+      const empQ = await pool.query('SELECT id FROM employees WHERE user_id=$1 LIMIT 1', [userId]);
+      if (!empQ.rowCount) return res.status(404).json({ error: 'Employee profile not found' });
+      empId = empQ.rows[0].id;
+    }
+    
     const salQ = await pool.query(
       'SELECT id, monthly_wage, yearly_wage, working_days_per_week, break_hours, pf_employee_rate, pf_employer_rate, professional_tax_override, created_at, updated_at FROM salary_structure WHERE employee_id=$1',
       [empId]

@@ -14,6 +14,9 @@ const router = express.Router();
 // Self
 router.get('/me', authRequired, getMySalaryStructure);
 
+// Get employee salary structure (Admin/HR/Payroll only)
+router.get('/:employee_id/structure', authRequired, permissionsAllowed('salary','view'), getMySalaryStructure);
+
 // Admin/hr/payroll (company scoped)
 router.get('/', authRequired, permissionsAllowed('salary','view'), listSalaryStructures);
 router.put('/:employee_id/structure', authRequired, permissionsAllowed('salary','update'), upsertSalaryStructure);

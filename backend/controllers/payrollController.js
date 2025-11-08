@@ -1,6 +1,12 @@
 import { pool } from '../db.js';
 import PDFDocument from 'pdfkit';
 
+function getMonthName(month) {
+  const months = ['January', 'February', 'March', 'April', 'May', 'June', 
+                  'July', 'August', 'September', 'October', 'November', 'December'];
+  return months[month - 1] || 'Unknown';
+}
+
 function countExpectedWorkingDaysInMonth(year, month, workingDaysPerWeek = 5) {
   // month: 1-12
   const includeSaturday = workingDaysPerWeek >= 6;
@@ -74,7 +80,9 @@ async function computePayslipForEmployee(empId, year, month) {
   const gross = earnings.reduce((sum, e) => sum + e.amount, 0);
   const totalDeductions = deductions.reduce((sum, d) => sum + d.amount, 0);
   const net = gross - totalDeductions;
-  const employerCost = gross + pfEmpr; // simplistic employer cost
+  
+  // Employer Cost = Monthly Wage (prorated basic salary)
+  const employerCost = base;
 
   return { earnings, deductions, gross, net, employerCost, counts: { payableDays, present, leave, expectedWorking } };
 }
@@ -88,8 +96,41 @@ export async function createPayrun(req, res) {
     if (!['admin','payroll'].includes(role)) return res.status(403).json({ error: 'Forbidden' });
     if (!period_month || !period_year) return res.status(400).json({ error: 'period_month and period_year required' });
 
+    // Check if payrun already exists for this period
+    const existingPayrun = await client.query(
+      'SELECT id, status FROM payruns WHERE company_id=$1 AND period_month=$2 AND period_year=$3 LIMIT 1',
+      [companyId, period_month, period_year]
+    );
+    
+    if (existingPayrun.rowCount > 0) {
+      return res.status(409).json({ 
+        error: 'Payrun already exists',
+        message: `A payrun for ${getMonthName(period_month)} ${period_year} already exists.`,
+        existingPayrunId: existingPayrun.rows[0].id,
+        status: existingPayrun.rows[0].status
+      });
+    }
+
     await client.query('BEGIN');
     const employeesQ = await client.query('SELECT id FROM employees WHERE company_id=$1', [companyId]);
+    
+    // Validation: Check which employees don't have salary structures
+    const employeesWithoutSalary = [];
+    for (const row of employeesQ.rows) {
+      const salQ = await client.query('SELECT id FROM salary_structure WHERE employee_id=$1', [row.id]);
+      if (!salQ.rowCount) {
+        const empInfoQ = await client.query('SELECT first_name, last_name, email FROM employees WHERE id=$1', [row.id]);
+        if (empInfoQ.rowCount) {
+          const emp = empInfoQ.rows[0];
+          employeesWithoutSalary.push({
+            id: row.id,
+            name: `${emp.first_name} ${emp.last_name}`,
+            email: emp.email
+          });
+        }
+      }
+    }
+
     let employeeCount = 0;
     let totalEmployerCost = 0;
 
@@ -109,9 +150,9 @@ export async function createPayrun(req, res) {
 
       // Insert payslip
       const slipQ = await client.query(
-        `INSERT INTO payslips (payrun_id, employee_id, payable_days, total_worked_days, total_leaves, basic_wage, gross_wage, net_wage, status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'generated') RETURNING id`,
-        [payrunId, empId, counts.payableDays, counts.present, counts.leave, earnings.find(e=>e.name==='Monthly Wage')?.amount || 0, gross, net]
+        `INSERT INTO payslips (payrun_id, employee_id, payable_days, total_worked_days, total_leaves, basic_wage, gross_wage, net_wage, employer_cost, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'generated') RETURNING id`,
+        [payrunId, empId, counts.payableDays, counts.present, counts.leave, earnings.find(e=>e.name==='Monthly Wage')?.amount || 0, gross, net, employerCost]
       );
       const payslipId = slipQ.rows[0].id;
       // Components
@@ -133,7 +174,24 @@ export async function createPayrun(req, res) {
 
     await client.query('UPDATE payruns SET employee_count=$1, total_employer_cost=$2 WHERE id=$3', [employeeCount, totalEmployerCost, payrunId]);
     await client.query('COMMIT');
-    res.status(201).json({ id: payrunId, employee_count: employeeCount, total_employer_cost: totalEmployerCost, period_month, period_year });
+    
+    // Return response with warnings if some employees were skipped
+    const response = { 
+      id: payrunId, 
+      employee_count: employeeCount, 
+      total_employer_cost: totalEmployerCost, 
+      period_month, 
+      period_year 
+    };
+    
+    if (employeesWithoutSalary.length > 0) {
+      response.warnings = {
+        employees_without_salary: employeesWithoutSalary,
+        message: `${employeesWithoutSalary.length} employee(s) were skipped because they don't have salary structures defined.`
+      };
+    }
+    
+    res.status(201).json(response);
   } catch (e) {
     try { await client.query('ROLLBACK'); } catch(_) {}
     console.error(e);
@@ -321,7 +379,7 @@ export async function recomputePayslip(req, res) {
     const { id } = req.params;
     // Load payslip and payrun
     const psQ = await client.query(
-      `SELECT p.*, e.company_id, pr.period_month, pr.period_year
+      `SELECT p.*, e.company_id, pr.period_month, pr.period_year, p.payrun_id
          FROM payslips p
          JOIN employees e ON e.id = p.employee_id
          JOIN payruns pr ON pr.id = p.payrun_id
@@ -342,8 +400,8 @@ export async function recomputePayslip(req, res) {
 
     // Update payslip core fields
     await client.query(
-      `UPDATE payslips SET payable_days=$1, total_worked_days=$2, total_leaves=$3, basic_wage=$4, gross_wage=$5, net_wage=$6, status='generated' WHERE id=$7`,
-      [counts.payableDays, counts.present, counts.leave, earnings.find(e=>e.name==='Monthly Wage')?.amount || 0, gross, net, id]
+      `UPDATE payslips SET payable_days=$1, total_worked_days=$2, total_leaves=$3, basic_wage=$4, gross_wage=$5, net_wage=$6, employer_cost=$7, status='generated' WHERE id=$8`,
+      [counts.payableDays, counts.present, counts.leave, earnings.find(e=>e.name==='Monthly Wage')?.amount || 0, gross, net, employerCost, id]
     );
     // Replace components
     await client.query('DELETE FROM payslip_components WHERE payslip_id=$1', [id]);
@@ -359,8 +417,32 @@ export async function recomputePayslip(req, res) {
         [id, d.name, d.amount, true]
       );
     }
+
+    // CRITICAL FIX: Recalculate payrun totals after recomputing payslip
+    const payrunId = ps.payrun_id;
+    
+    // Recalculate all payslips in this payrun to get accurate totals
+    const allPayslipsQ = await client.query(
+      `SELECT id, employee_id FROM payslips WHERE payrun_id=$1 AND status != 'cancelled'`,
+      [payrunId]
+    );
+    
+    let totalEmployerCost = 0;
+    for (const slip of allPayslipsQ.rows) {
+      const slipResult = await computePayslipForEmployee(slip.employee_id, ps.period_year, ps.period_month);
+      if (slipResult) {
+        totalEmployerCost += slipResult.employerCost;
+      }
+    }
+    
+    const employeeCount = allPayslipsQ.rowCount;
+    await client.query(
+      'UPDATE payruns SET employee_count=$1, total_employer_cost=$2 WHERE id=$3',
+      [employeeCount, totalEmployerCost, payrunId]
+    );
+
     await client.query('COMMIT');
-    res.json({ id, status: 'generated' });
+    res.json({ id, status: 'generated', payrun_totals_updated: true });
   } catch (e) {
     try { await client.query('ROLLBACK'); } catch(_) {}
     console.error(e);

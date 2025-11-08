@@ -7,10 +7,12 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Plane } from 'lucide-react'
 import PageHeader from '@/components/layout/PageHeader'
 import NewEmployeeModal from '@/components/modals/NewEmployeeModal'
+import SalarySetupModal from '@/components/modals/SalarySetupModal'
 import { markAttendance } from '@/redux/slices/attendanceSlice'
 import { setEmployees } from '@/redux/slices/employeesSlice'
 import { listEmployees as listEmployeesApi } from '@/api/employees'
 import { listAttendanceByDate } from '@/api/attendance'
+import { getEmployeeSalary } from '@/api/salary'
 import toast from 'react-hot-toast'
 
 export default function EmployeeDirectory() {
@@ -21,12 +23,22 @@ export default function EmployeeDirectory() {
   const { requests } = useSelector((state) => state.leave)
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedEmployee, setSelectedEmployee] = useState(null)
+  const [selectedEmployeeSalary, setSelectedEmployeeSalary] = useState(null)
+  const [loadingSalary, setLoadingSalary] = useState(false)
   const [showAttendanceModal, setShowAttendanceModal] = useState(null)
   const [showNewEmployeeModal, setShowNewEmployeeModal] = useState(false)
+  const [showSalarySetupModal, setShowSalarySetupModal] = useState(false)
   const [loading, setLoading] = useState(false)
 
-  const isHROrAdmin = ['HR Officer', 'Admin'].includes(currentUser?.user?.role || currentUser?.role)
+  const userRole = (currentUser?.user?.role || currentUser?.role || '').toLowerCase()
+  const isHROrAdmin = ['hr officer', 'admin'].includes(userRole)
+  const isHRAdminOrPayroll = ['hr officer', 'admin', 'payroll officer'].includes(userRole)
   const today = new Date().toISOString().split('T')[0]
+
+  // Debug logging
+  console.log('Current User:', currentUser)
+  console.log('User Role:', currentUser?.user?.role || currentUser?.role)
+  console.log('isHRAdminOrPayroll:', isHRAdminOrPayroll)
 
   // Fetch employees (with backend attendance enrichment for admin/hr) on load
   useEffect(() => {
@@ -197,6 +209,47 @@ export default function EmployeeDirectory() {
     }
   }
 
+  // Handle employee selection and fetch salary data
+  const handleEmployeeClick = async (employee) => {
+    console.log('Employee clicked:', employee)
+    console.log('Will fetch salary:', isHRAdminOrPayroll)
+    
+    setSelectedEmployee(employee)
+    setSelectedEmployeeSalary(null) // Reset previous salary data
+    
+    // Only fetch salary if user has permission
+    if (isHRAdminOrPayroll) {
+      setLoadingSalary(true)
+      try {
+        console.log('Fetching salary for employee ID:', employee.id)
+        const salaryData = await getEmployeeSalary(employee.id)
+        console.log('Salary data received:', salaryData)
+        setSelectedEmployeeSalary(salaryData)
+      } catch (error) {
+        // Silently fail - salary might not be set up yet
+        console.log('No salary data found for employee:', employee.id, error)
+      } finally {
+        setLoadingSalary(false)
+      }
+    }
+  }
+
+  // Refresh salary data after updates
+  const handleSalaryUpdated = async () => {
+    if (selectedEmployee && isHRAdminOrPayroll) {
+      setLoadingSalary(true)
+      try {
+        const salaryData = await getEmployeeSalary(selectedEmployee.id)
+        setSelectedEmployeeSalary(salaryData)
+        toast.success('Salary data refreshed')
+      } catch (error) {
+        console.log('Failed to refresh salary data:', error)
+      } finally {
+        setLoadingSalary(false)
+      }
+    }
+  }
+
   return (
     <>
       {/* Page Header - Full width, no padding */}
@@ -232,7 +285,7 @@ export default function EmployeeDirectory() {
             >
               <Card 
                 className="overflow-hidden cursor-pointer hover:shadow-lg transition-shadow"
-                onClick={() => setSelectedEmployee(employee)}
+                onClick={() => handleEmployeeClick(employee)}
               >
                 <CardContent className="p-0">
                   <div className="flex items-center gap-4 p-4">
@@ -454,7 +507,126 @@ export default function EmployeeDirectory() {
                     </div>
                   </div>
 
+                  {/* Salary Information Section - Only for HR/Admin/Payroll */}
+                  {(() => {
+                    console.log('Rendering salary section, isHRAdminOrPayroll:', isHRAdminOrPayroll)
+                    console.log('loadingSalary:', loadingSalary)
+                    console.log('selectedEmployeeSalary:', selectedEmployeeSalary)
+                    return null
+                  })()}
+                  {isHRAdminOrPayroll && (
+                    <div className="space-y-4">
+                      <h3 className="font-semibold text-lg border-b pb-2">Salary Information</h3>
+                      
+                      {loadingSalary ? (
+                        <div className="text-center py-4 text-muted-foreground">Loading salary information...</div>
+                      ) : selectedEmployeeSalary?.structure ? (
+                        <>
+                          {/* Salary Structure */}
+                          <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+                            <div className="flex items-center gap-4">
+                              <label className="text-sm text-muted-foreground min-w-[140px]">Monthly Wage</label>
+                              <div className="flex-1 border-b border-muted-foreground/30 pb-1">
+                                <span className="text-sm font-semibold">
+                                  ₹{selectedEmployeeSalary.structure.monthly_wage?.toLocaleString('en-IN') || '0'}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-4">
+                              <label className="text-sm text-muted-foreground min-w-[140px]">Yearly Wage</label>
+                              <div className="flex-1 border-b border-muted-foreground/30 pb-1">
+                                <span className="text-sm font-semibold">
+                                  ₹{selectedEmployeeSalary.structure.yearly_wage?.toLocaleString('en-IN') || '0'}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-4">
+                              <label className="text-sm text-muted-foreground min-w-[140px]">Working Days/Week</label>
+                              <div className="flex-1 border-b border-muted-foreground/30 pb-1">
+                                <span className="text-sm">{selectedEmployeeSalary.structure.working_days_per_week || 'N/A'}</span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-4">
+                              <label className="text-sm text-muted-foreground min-w-[140px]">Break Hours</label>
+                              <div className="flex-1 border-b border-muted-foreground/30 pb-1">
+                                <span className="text-sm">{selectedEmployeeSalary.structure.break_hours || 'N/A'}</span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-4">
+                              <label className="text-sm text-muted-foreground min-w-[140px]">PF Employee Rate</label>
+                              <div className="flex-1 border-b border-muted-foreground/30 pb-1">
+                                <span className="text-sm">{selectedEmployeeSalary.structure.pf_employee_rate ? `${selectedEmployeeSalary.structure.pf_employee_rate}%` : 'N/A'}</span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-4">
+                              <label className="text-sm text-muted-foreground min-w-[140px]">PF Employer Rate</label>
+                              <div className="flex-1 border-b border-muted-foreground/30 pb-1">
+                                <span className="text-sm">{selectedEmployeeSalary.structure.pf_employer_rate ? `${selectedEmployeeSalary.structure.pf_employer_rate}%` : 'N/A'}</span>
+                              </div>
+                            </div>
+
+                            {selectedEmployeeSalary.structure.professional_tax_override !== null && (
+                              <div className="flex items-center gap-4 col-span-2">
+                                <label className="text-sm text-muted-foreground min-w-[140px]">Professional Tax Override</label>
+                                <div className="flex-1 border-b border-muted-foreground/30 pb-1">
+                                  <span className="text-sm">₹{selectedEmployeeSalary.structure.professional_tax_override?.toLocaleString('en-IN')}</span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Salary Components */}
+                          {selectedEmployeeSalary.components && selectedEmployeeSalary.components.length > 0 && (
+                            <div className="mt-4">
+                              <h4 className="font-medium text-sm mb-3">Salary Components</h4>
+                              <div className="space-y-2">
+                                {selectedEmployeeSalary.components.map((component) => (
+                                  <div key={component.id} className="flex items-center justify-between p-3 bg-muted/30 rounded-lg">
+                                    <div className="flex-1">
+                                      <p className="text-sm font-medium">{component.name}</p>
+                                      <p className="text-xs text-muted-foreground">
+                                        {component.computation_type === 'percentage' 
+                                          ? `${component.value}% of base` 
+                                          : 'Fixed amount'}
+                                      </p>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className={`text-sm font-semibold ${component.is_deduction ? 'text-red-600' : 'text-green-600'}`}>
+                                        {component.is_deduction ? '-' : '+'}₹{component.amount?.toLocaleString('en-IN') || '0'}
+                                      </p>
+                                      <p className="text-xs text-muted-foreground">
+                                        {component.is_deduction ? 'Deduction' : 'Allowance'}
+                                      </p>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div className="text-center py-4 text-muted-foreground">
+                          <p className="text-sm">No salary structure configured for this employee.</p>
+                          <p className="text-xs mt-1">Contact HR/Admin to set up salary details.</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <div className="flex gap-2 justify-end pt-4 border-t">
+                    {isHRAdminOrPayroll && (
+                      <Button 
+                        onClick={() => setShowSalarySetupModal(true)}
+                        className="bg-green-600 hover:bg-green-700"
+                      >
+                        Setup Salary
+                      </Button>
+                    )}
                     <Button variant="outline" onClick={() => setSelectedEmployee(null)}>
                       Close
                     </Button>
@@ -576,6 +748,17 @@ export default function EmployeeDirectory() {
         isOpen={showNewEmployeeModal}
         onClose={() => setShowNewEmployeeModal(false)}
       />
+
+      {/* Salary Setup Modal */}
+      {selectedEmployee && (
+        <SalarySetupModal
+          isOpen={showSalarySetupModal}
+          onClose={() => setShowSalarySetupModal(false)}
+          employee={selectedEmployee}
+          salaryData={selectedEmployeeSalary}
+          onSalaryUpdated={handleSalaryUpdated}
+        />
+      )}
     </>
   )
 }
